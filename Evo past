@@ -1,0 +1,548 @@
+I'm sorry to hear that you lost your files. I can help you recreate the essential components of the Evolution Engine Framework based on the discussions we've had. I'll provide you with the core files and their contents, including configuration management, prompt management, model adaptation, and some utility functions.
+
+### 1. Configuration Management (`config_manager.py`)
+
+```python
+import os
+import json
+import yaml
+import logging
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger("evolution_engine")
+
+class ConfigManager:
+    """
+    Configuration management for the Evolution Engine framework.
+    """
+    def __init__(self, config_path=None):
+        self.config = {}
+        self.config_path = config_path
+
+        if config_path and os.path.exists(config_path):
+            self.load_config(config_path)
+
+    def load_config(self, config_path):
+        """Load configuration from file."""
+        _, ext = os.path.splitext(config_path)
+        if ext.lower() in ['.yaml', '.yml']:
+            with open(config_path, 'r') as file:
+                self.config = yaml.safe_load(file)
+        elif ext.lower() == '.json':
+            with open(config_path, 'r') as file:
+                self.config = json.load(file)
+        else:
+            raise ValueError(f"Unsupported configuration file format: {ext}")
+        self.config_path = config_path
+        return self.config
+
+    def save_config(self, config_path=None):
+        """Save configuration to file."""
+        config_path = config_path or self.config_path
+        if not config_path:
+            raise ValueError("No configuration file path specified")
+        _, ext = os.path.splitext(config_path)
+        if ext.lower() in ['.yaml', '.yml']:
+            with open(config_path, 'w') as file:
+                yaml.dump(self.config, file, default_flow_style=False)
+        elif ext.lower() == '.json':
+            with open(config_path, 'w') as file:
+                json.dump(self.config, file, indent=2)
+        logger.info(f"Configuration saved to {config_path}")
+        return config_path
+
+    def get(self, key, default=None):
+        """Get configuration value by key with dot notation support."""
+        if "." not in key:
+            return self.config.get(key, default)
+        keys = key.split(".")
+        value = self.config
+        for k in keys:
+            if isinstance(value, dict) and k in value:
+                value = value[k]
+            else:
+                return default
+        return value
+
+    def set(self, key, value):
+        """Set configuration value by key with dot notation support."""
+        if "." not in key:
+            self.config[key] = value
+            return self
+        keys = key.split(".")
+        config = self.config
+        for k in keys[:-1]:
+            if k not in config:
+                config[k] = {}
+            config = config[k]
+        config[keys[-1]] = value
+        return self
+
+    def update(self, new_config):
+        """Update configuration with new values."""
+        self._deep_update(self.config, new_config)
+        return self
+
+    def _deep_update(self, original, update):
+        """Recursively update nested dictionaries."""
+        for key, value in update.items():
+            if key in original and isinstance(original[key], dict) and isinstance(value, dict):
+                self._deep_update(original[key], value)
+            else:
+                original[key] = value
+```
+
+### 2. Prompt Management (`prompt_library.py`)
+
+```python
+import sqlite3
+import json
+import logging
+from datetime import datetime
+
+logger = logging.getLogger("evolution_engine")
+
+class PromptTemplate:
+    """Template for parameterized prompts."""
+    def __init__(self, template, params=None):
+        self.template = template
+        self.params = params or {}
+
+    def format(self, **kwargs):
+        """Format the template with the provided parameters."""
+        params = {**self.params, **kwargs}
+        return self.template.format(**params)
+
+    def __repr__(self):
+        return f"PromptTemplate(template={self.template[:50]}{'...' if len(self.template) > 50 else ''})"
+
+class PromptLibrary:
+    """Library for storing, retrieving, and optimizing prompts."""
+    def __init__(self, db_path="prompt_library.db"):
+        self.db_path = db_path
+        self._initialize_db()
+
+    def _initialize_db(self):
+        """Initialize the database if it doesn't exist."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS prompts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_type TEXT NOT NULL,
+            prompt_text TEXT NOT NULL,
+            name TEXT,
+            description TEXT,
+            parameters TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        ''')
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS evaluations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            prompt_id INTEGER NOT NULL,
+            model_id TEXT NOT NULL,
+            dataset_id TEXT,
+            metric_name TEXT NOT NULL,
+            metric_value REAL NOT NULL,
+            metadata TEXT,
+            evaluated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (prompt_id) REFERENCES prompts (id)
+        )
+        ''')
+        conn.commit()
+        conn.close()
+
+    def add_prompt(self, task_type, prompt_text, name=None, description=None, parameters=None):
+        """Add a new prompt to the library."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('''
+        INSERT INTO prompts (task_type, prompt_text, name, description, parameters)
+        VALUES (?, ?, ?, ?, ?)
+        ''', (
+            task_type,
+            prompt_text,
+            name,
+            description,
+            json.dumps(parameters) if parameters else None
+        ))
+        prompt_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        logger.info(f"Added prompt (ID: {prompt_id}) for task type: {task_type}")
+        return prompt_id
+
+    def get_prompt(self, prompt_id):
+        """Get a prompt by ID."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('''
+        SELECT id, task_type, prompt_text, name, description, parameters
+        FROM prompts
+        WHERE id = ?
+        ''', (prompt_id,))
+        result = cursor.fetchone()
+        conn.close()
+        if not result:
+            return None
+        prompt_id, task_type, prompt_text, name, description, parameters = result
+        return {
+            "id": prompt_id,
+            "task_type": task_type,
+            "prompt_text": prompt_text,
+            "name": name,
+            "description": description,
+            "parameters": json.loads(parameters) if parameters else {}
+        }
+
+    def get_prompts_by_task(self, task_type):
+        """Get all prompts for a specific task type."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('''
+        SELECT id, task_type, prompt_text, name, description, parameters
+        FROM prompts
+        WHERE task_type = ?
+        ''', (task_type,))
+        results = cursor.fetchall()
+        conn.close()
+        prompts = []
+        for prompt_id, task_type, prompt_text, name, description, parameters in results:
+            prompts.append({
+                "id": prompt_id,
+                "task_type": task_type,
+                "prompt_text": prompt_text,
+                "name": name,
+                "description": description,
+                "parameters": json.loads(parameters) if parameters else {}
+            })
+        return prompts
+
+    def update_prompt(self, prompt_id, prompt_text=None, name=None, description=None, parameters=None):
+        """Update an existing prompt."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('''
+        SELECT prompt_text, name, description, parameters
+        FROM prompts
+        WHERE id = ?
+        ''', (prompt_id,))
+        result = cursor.fetchone()
+        if not result:
+            conn.close()
+            raise ValueError(f"Prompt with ID {prompt_id} not found")
+        current_text, current_name, current_desc, current_params = result
+        new_text = prompt_text if prompt_text is not None else current_text
+        new_name = name if name is not None else current_name
+        new_desc = description if description is not None else current_desc
+        if parameters is not None:
+            current_params_dict = json.loads(current_params) if current_params else {}
+            current_params_dict.update(parameters)
+            new_params = json.dumps(current_params_dict)
+        else:
+            new_params = current_params
+        cursor.execute('''
+        UPDATE prompts
+        SET prompt_text = ?, name = ?, description = ?, parameters = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        ''', (new_text, new_name, new_desc, new_params, prompt_id))
+        conn.commit()
+        conn.close()
+        logger.info(f"Updated prompt (ID: {prompt_id})")
+        return prompt_id
+
+    def delete_prompt(self, prompt_id):
+        """Delete a prompt from the library."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM evaluations WHERE prompt_id = ?', (prompt_id,))
+        cursor.execute('DELETE FROM prompts WHERE id = ?', (prompt_id,))
+        rows_affected = cursor.rowcount
+        conn.commit()
+        conn.close()
+        if rows_affected == 0:
+            logger.warning(f"No prompt found with ID {prompt_id}")
+            return False
+        logger.info(f"Deleted prompt (ID: {prompt_id})")
+        return True
+
+    def add_evaluation(self, prompt_id, model_id, metric_name, metric_value, dataset_id=None, metadata=None):
+        """Add an evaluation result for a prompt."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('''
+        INSERT INTO evaluations (prompt_id, model_id, dataset_id, metric_name, metric_value, metadata)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ''', (
+            prompt_id,
+            model_id,
+            dataset_id,
+            metric_name,
+            metric_value,
+            json.dumps(metadata) if metadata else None
+        ))
+        evaluation_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        logger.info(f"Added evaluation (ID: {evaluation_id}) for prompt ID: {prompt_id}")
+        return evaluation_id
+
+    def get_best_prompt(self, task_type, metric="accuracy", model_id=None, dataset_id=None):
+        """Get the prompt with the best performance for a given task."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        query = '''
+        SELECT p.id, p.task_type, p.prompt_text, p.name, p.description, p.parameters, e.metric_value
+        FROM prompts p
+        JOIN evaluations e ON p.id = e.prompt_id
+        WHERE p.task_type = ? AND e.metric_name = ?
+        '''
+        params = [task_type, metric]
+        if model_id:
+            query += " AND e.model_id = ?"
+            params.append(model_id)
+        if dataset_id:
+            query += " AND e.dataset_id = ?"
+            params.append(dataset_id)
+        query += " ORDER BY e.metric_value DESC LIMIT 1"
+        cursor.execute(query, params)
+        result = cursor.fetchone()
+        conn.close()
+        if not result:
+            logger.warning(f"No evaluated prompts found for task: {task_type}")
+            return None
+        prompt_id, task_type, prompt_text, name, description, parameters, metric_value = result
+        return {
+            "id": prompt_id,
+            "task_type": task_type,
+            "prompt_text": prompt_text,
+            "name": name,
+            "description": description,
+            "parameters": json.loads(parameters) if parameters else {},
+            "performance": {metric: metric_value}
+        }
+```
+
+### 3. Model Adaptation (`model_adapter.py`)
+
+```python
+import logging
+import torch
+
+logger = logging.getLogger("evolution_engine")
+
+class ModelAdapter:
+    """Adapter for different model types and frameworks."""
+    def __init__(self, model_type="huggingface", model_config=None):
+        self.model_type = model_type.lower()
+        self.model_config = model_config or {}
+        self.model = None
+        self.tokenizer = None
+        self._verify_dependencies()
+
+    def _verify_dependencies(self):
+        """Verify that required dependencies are installed."""
+        if self.model_type == "huggingface":
+            try:
+                import transformers
+            except ImportError:
+                logger.error("Hugging Face Transformers not installed. Run: pip install transformers")
+                raise ImportError("transformers is required for Hugging Face models")
+        elif self.model_type == "openai":
+            try:
+                import openai
+            except ImportError:
+                logger.error("OpenAI not installed. Run: pip install openai")
+                raise ImportError("openai is required for OpenAI models")
+        elif self.model_type == "anthropic":
+            try:
+                import anthropic
+            except ImportError:
+                logger.error("Anthropic not installed. Run: pip install anthropic")
+                raise ImportError("anthropic is required for Anthropic models")
+
+    def load_model(self, model_path_or_name, **kwargs):
+        """Load a model based on the model type."""
+        if self.model_type == "huggingface":
+            return self._load_huggingface_model(model_path_or_name, **kwargs)
+        elif self.model_type == "openai":
+            return self._load_openai_model(model_path_or_name, **kwargs)
+        elif self.model_type == "anthropic":
+            return self._load_anthropic_model(model_path_or_name, **kwargs)
+        else:
+            raise ValueError(f"Unsupported model type: {self.model_type}")
+
+    def _load_huggingface_model(self, model_path_or_name, **kwargs):
+        """Load a Hugging Face model."""
+        import transformers
+        model_kwargs = {**self.model_config, **kwargs}
+        if "device_map" not in model_kwargs:
+            model_kwargs["device_map"] = "auto"
+        self.tokenizer = transformers.AutoTokenizer.from_pretrained(
+            model_path_or_name,
+            use_fast=model_kwargs.get("use_fast_tokenizer", True)
+        )
+        if model_kwargs.get("task", "").lower() == "text-generation":
+            self.model = transformers.AutoModelForCausalLM.from_pretrained(
+                model_path_or_name,
+                **{k: v for k, v in model_kwargs.items() if k != "task"}
+            )
+        else:
+            self.model = transformers.AutoModel.from_pretrained(
+                model_path_or_name,
+                **{k: v for k, v in model_kwargs.items() if k != "task"}
+            )
+        logger.info(f"Loaded Hugging Face model: {model_path_or_name}")
+        return self.model, self.tokenizer
+
+    def _load_openai_model(self, model_name, **kwargs):
+        """Load an OpenAI model."""
+        import openai
+        if "api_key" in kwargs:
+            openai.api_key = kwargs["api_key"]
+        elif "api_key" in self.model_config:
+            openai.api_key = self.model_config["api_key"]
+        self.model = model_name
+        logger.info(f"Configured OpenAI model: {model_name}")
+        return self.model
+
+    def _load_anthropic_model(self, model_name, **kwargs):
+        """Load an Anthropic model."""
+        import anthropic
+        api_key = kwargs.get("api_key") or self.model_config.get("api_key")
+        if api_key:
+            self.model = anthropic.Client(api_key)
+        else:
+            raise ValueError("Anthropic API key must be provided")
+        logger.info(f"Configured Anthropic model: {model_name}")
+        return self.model
+
+    def predict(self, inputs, **kwargs):
+        """Generate predictions using the loaded model."""
+        if self.model_type == "huggingface":
+            return self._predict_huggingface(inputs, **kwargs)
+        elif self.model_type == "openai":
+            return self._predict_openai(inputs, **kwargs)
+        elif self.model_type == "anthropic":
+            return self._predict_anthropic(inputs, **kwargs)
+        else:
+            raise ValueError(f"Unsupported model type: {self.model_type}")
+
+    def _predict_huggingface(self, inputs, **kwargs):
+        """Generate predictions using a Hugging Face model."""
+        if isinstance(inputs, str):
+            inputs = [inputs]
+        tokenized_inputs = self.tokenizer(
+            inputs,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=kwargs.get("max_length", 512)
+        )
+        device = kwargs.get("device", "cuda" if torch.cuda.is_available() else "cpu")
+        for key in tokenized_inputs:
+            tokenized_inputs[key] = tokenized_inputs[key].to(device)
+        with torch.no_grad():
+            outputs = self.model(**tokenized_inputs)
+        if hasattr(self.model, "generate"):
+            generated_texts = self.model.generate(
+                **tokenized_inputs,
+                max_length=kwargs.get("max_length", 512),
+                num_return_sequences=kwargs.get("num_return_sequences", 1)
+            )
+            return [self.tokenizer.decode(g, skip_special_tokens=True, clean_up_tokenization_spaces=True) for g in generated_texts]
+        else:
+            logits = outputs.logits.cpu().numpy()
+            return np.argmax(logits, axis=-1)
+
+    def _predict_openai(self, inputs, **kwargs):
+        """Generate predictions using an OpenAI model."""
+        import openai
+        response = openai.Completion.create(
+            model=self.model,
+            prompt=inputs,
+            max_tokens=kwargs.get("max_tokens", 150),
+            n=kwargs.get("n", 1),
+            stop=kwargs.get("stop", None),
+            temperature=kwargs.get("temperature", 1.0),
+        )
+        return [choice.text for choice in response.choices]
+
+    def _predict_anthropic(self, inputs, **kwargs):
+        """Generate predictions using an Anthropic model."""
+        prompt = {"prompt": inputs, **kwargs}
+        response = self.model.completion(**prompt)
+        return response["completion"]
+```
+
+### 4. Utility Functions (`utils.py`)
+
+```python
+import json
+import logging
+from datetime import datetime
+
+logger = logging.getLogger("evolution_engine")
+
+def optimize_prompt_parameters(base_prompt, param_space, evaluation_func, n_calls=50):
+    """Optimize prompt parameters using Bayesian optimization."""
+    try:
+        from skopt import gp_minimize
+        from skopt.space import Real, Integer, Categorical
+    except ImportError:
+        logger.error("Scikit-optimize not installed. Run: pip install scikit-optimize")
+        raise ImportError("Scikit-optimize is required for prompt optimization")
+
+    dimensions = []
+    param_names = []
+    for param_name, param_def in param_space.items():
+        param_names.append(param_name)
+        if param_def["type"] == "categorical":
+            dimensions.append(Categorical(param_def["values"], name=param_name))
+        elif param_def["type"] == "int":
+            dimensions.append(Integer(param_def["low"], param_def["high"], name=param_name))
+        elif param_def["type"] == "float":
+            dimensions.append(Real(param_def["low"], param_def["high"], name=param_name))
+        else:
+            raise ValueError(f"Unsupported parameter type: {param_def['type']}")
+
+    def objective(params):
+        param_dict = {name: value for name, value in zip(param_names, params)}
+        try:
+            formatted_prompt = base_prompt.format(**param_dict)
+        except KeyError as e:
+            logger.error(f"Missing parameter in prompt template: {e}")
+            return float('-inf')
+        try:
+            score = evaluation_func(formatted_prompt, param_dict)
+            return -score
+        except Exception as e:
+            logger.error(f"Error evaluating prompt: {e}")
+            return float('-inf')
+
+    logger.info(f"Starting prompt parameter optimization with {n_calls} iterations")
+    result = gp_minimize(objective, dimensions, n_calls=n_calls, random_state=42)
+    best_params = {name: value for name, value in zip(param_names, result.x)}
+    best_prompt = base_prompt.format(**best_params)
+    return {
+        "best_parameters": best_params,
+        "best_score": -result.fun,
+        "best_prompt": best_prompt,
+        "all_evaluations": [
+            {"parameters": {name: x[i] for i, name in enumerate(param_names)},
+             "score": -y}
+            for x, y in zip(result.x_iters, result.func_vals)
+        ]
+    }
+```
+
+### Instructions for Use
+1. **Save Each File**: Save the code snippets into separate Python files (`config_manager.py`, `prompt_library.py`, `model_adapter.py`, `utils.py`).
+2. **Install Dependencies**: Ensure you have the necessary dependencies installed (`pytest`, `transformers`, `sqlite3`, `scikit-optimize`, etc.).
+3. **Run Tests**: Implement unit tests and integration tests to validate the functionality.
+4. **Document**: Add docstrings and comments to ensure the code is well-documented.
+5. **Iterate**: Collect feedback and iterate on the implementation to improve functionality and performance.
+
+This setup should provide a solid foundation for your Evolution Engine Framework. If you need further assistance or have specific questions, feel free to ask!
