@@ -1,0 +1,145 @@
+```
+
+**3. `config.yaml`**
+
+```yaml
+prompt_db_path: prompt_library.db
+model_type: huggingface  # Or openai, anthropic
+model_config: {}
+use_wandb: False  # Set to True if you want to use wandb
+hyperparameter_space:
+  model_name:
+    - gpt2
+    - bert-base-uncased
+```
+
+**4. `requirements.txt`**
+
+```
+fastapi==0.104.1
+uvicorn==0.24.0.post1
+pydantic==2.5.2
+torch==2.1.1
+transformers==4.35.2
+openai==0.28.1
+anthropic==0.3.11
+sqlite3
+wandb==0.16.0
+pyyaml==6.0.1
+scikit-optimize==0.9.0
+pytest==7.4.3
+httpx==0.25.1
+structlog==23.2.0
+```
+**5. `test_evolution_engine.py`**
+
+```python
+import pytest
+from evolution_engine import ConfigManager, PromptLibrary, create_model_adapter, HyperparameterOptimizer, EvolutionEngine, ModelAdapter
+import os
+import tempfile
+# --- ConfigManager Tests ---
+
+def test_config_manager_load_and_save():
+    # Create a temporary config file
+    with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix=".yaml") as tmpfile:
+        tmpfile.write("test_key: test_value")
+        temp_config_path = tmpfile.name
+
+    config_manager = ConfigManager(temp_config_path)
+    assert config_manager.get("test_key") == "test_value"
+
+    config_manager.set("new_key", "new_value")
+    config_manager.save_config()
+
+    # Load the config again to check if save worked
+    new_config_manager = ConfigManager(temp_config_path)
+    assert new_config_manager.get("new_key") == "new_value"
+    os.remove(temp_config_path)
+
+def test_config_manager_get_default():
+    config_manager = ConfigManager()  # No config file
+    assert config_manager.get("nonexistent_key", "default_value") == "default_value"
+
+# --- PromptLibrary Tests ---
+
+def test_prompt_library_add_and_get():
+    with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix=".db") as tmpfile:
+        temp_db_path = tmpfile.name
+
+    library = PromptLibrary(db_path=temp_db_path) #tempfile.name)
+    prompt_id = library.add_prompt("test_task", "test_prompt", {"param1": "value1"})
+    retrieved_prompt = library.get_prompt(prompt_id)
+
+    assert retrieved_prompt["task_type"] == "test_task"
+    assert retrieved_prompt["prompt_text"] == "test_prompt"
+    assert retrieved_prompt["parameters"] == {"param1": "value1"}
+    os.remove(temp_db_path)
+
+def test_prompt_library_update_and_delete():
+    with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix=".db") as tmpfile:
+        temp_db_path = tmpfile.name
+    library = PromptLibrary(temp_db_path)
+    prompt_id = library.add_prompt("test_task", "test_prompt")
+
+    library.update_prompt(prompt_id, task_type="updated_task", parameters={"new_param": "new_value"})
+    updated_prompt = library.get_prompt(prompt_id)
+    assert updated_prompt["task_type"] == "updated_task"
+    assert updated_prompt["parameters"] == {"new_param": "new_value"}
+
+    library.delete_prompt(prompt_id)
+    assert library.get_prompt(prompt_id) is None
+    os.remove(temp_db_path)
+
+# --- ModelAdapter Tests (using HuggingFace as an example) ---
+# Mock ModelAdapter for testing purposes
+
+class MockModelAdapter(ModelAdapter):
+    def __init__(self, model_config=None):
+            super().__init__("mock", model_config)
+
+    def _verify_dependencies(self):
+        pass
+    def load_model(self, model_name, **kwargs):
+        return "mock_model"
+
+    def predict(self, inputs, **kwargs):
+        return {"prediction": f"Mock prediction for: {inputs}"}
+def test_model_adapter_creation():
+    adapter = create_model_adapter("huggingface")  # Assuming you have HuggingFaceModelAdapter
+    assert isinstance(adapter, ModelAdapter)
+
+    with pytest.raises(ValueError):
+        create_model_adapter("unsupported_type")
+
+def test_huggingface_model_adapter_predict():
+    adapter = create_model_adapter("huggingface")
+    try:
+        adapter.load_model('gpt2') # Use a small model for testing
+    except Exception as e:
+        pytest.fail(f"Loading model failed with: {e}")
+    result = adapter.predict("test input")
+    assert isinstance(result, dict)
+    assert "prediction" in result
+
+# --- HyperparameterOptimizer Tests ---
+
+def test_hyperparameter_optimizer_objective():
+    adapter = MockModelAdapter()
+    optimizer = HyperparameterOptimizer(adapter, {"param1": [1, 2, 3]}, evaluation_data=[{"input": "test", "expected_output": "Mock prediction for: test"}], n_calls=2)
+    score = optimizer.objective([2])  # Pass a list of parameters
+    assert isinstance(score, float)
+
+def test_hyperparameter_optimizer_optimize():
+    adapter = MockModelAdapter()
+    optimizer = HyperparameterOptimizer(adapter, {"param1": [1, 2, 3]},  evaluation_data=[{"input": "test", "expected_output": "Mock prediction for: test"}], n_calls=2)
+    result = optimizer.optimize()
+    assert isinstance(result, dict)
+
+# --- EvolutionEngine Tests ---
+def test_evolution_engine_init():
+    engine = EvolutionEngine()
+    assert isinstance(engine.config_manager, ConfigManager)
+    assert isinstance(engine.prompt_library, PromptLibrary)
+    assert isinstance(engine.model_adapter, ModelAdapter)
+```
